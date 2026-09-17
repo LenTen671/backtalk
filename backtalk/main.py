@@ -57,6 +57,7 @@ import json
 import queue
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -71,6 +72,30 @@ from backtalk.ptt import PTTListener
 from backtalk.vlog import log
 
 NAME = CFG["name"]
+
+
+def _notify_online():
+    """Pop a macOS notification the moment the voice line comes up.
+
+    The spoken greeting alone misses anyone not within earshot at the
+    exact second a silent, background launch (the login LaunchAgent)
+    comes up -- which is exactly when someone then relaunches by hand,
+    unaware one is already running, and the single-instance guard in
+    run.sh kills the first for the second. This leaves a visible,
+    persistent trace in Notification Center so "is it already up?" has
+    an answer without relaunching it. No-op off macOS.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "Hold {CFG["ptt_key"]} and talk." '
+             f'with title "{NAME} is online" sound name "Glass"'],
+            check=False, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass  # a missing notification must never take the voice down
 QUIT_PHRASES = CFG["quit_phrases"]
 
 # ---- THE SPOKEN PERMISSION GATE (permission_mode "ask", the default).
@@ -675,6 +700,7 @@ async def amain():
         f"model={brain.model} mic={mode} "
         f"(say 'goodbye {NAME.lower()}' to hang up)")
     mouth.say(CFG["greeting"])
+    _notify_online()
 
     loop = asyncio.get_event_loop()
     # Warm the engines while the greeting plays: the STT model load and
@@ -861,7 +887,7 @@ async def amain():
         when the utterance STARTED (the PTT press), so an answer can be
         told apart from speech that began before the ask even existed."""
         nonlocal speak_task
-        log(f"[you]    {text}")
+        log(f"[you]    {text}", color="32")
         # A pending spoken permission ask owns the next utterance IF
         # that utterance started after the ask was posed. Speech that
         # began earlier is the user interrupting the turn, not

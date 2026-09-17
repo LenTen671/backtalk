@@ -61,12 +61,15 @@ def _init_console():
 _init_console()
 
 
-def log(line: str):
+def log(line: str, color: str | None = None):
+    """color is an ANSI SGR code (e.g. "34" for blue), console-only —
+    the saved log file always gets the plain, uncolored line."""
+    console_line = f"\033[{color}m{line}\033[0m" if color else line
     try:
-        print(line, flush=True)
+        print(console_line, flush=True)
     except UnicodeEncodeError:
         # Last resort if the console refused UTF-8: readable beats fatal.
-        print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+        print(console_line.encode("ascii", "replace").decode("ascii"), flush=True)
     try:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         # encoding pinned on purpose. The default is the platform's, which

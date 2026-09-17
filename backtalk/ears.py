@@ -34,8 +34,15 @@ import numpy as np
 import sounddevice as sd
 import webrtcvad
 
-from backtalk.config import CFG
+from backtalk.config import CFG, REPO
 from backtalk.vlog import log
+
+# Written by an external watcher (jump-mic-switch/watch.sh) with the name
+# of the mic to prefer for as long as a Jump Desktop remote session is
+# connected; absent the rest of the time. Checked ahead of CFG's own
+# mic_device so a phone-connected session gets heard without needing a
+# backtalk restart or a config-file edit.
+_MIC_OVERRIDE_FILE = REPO / ".mic_override"
 
 RATE = 16000
 FRAME_MS = 30
@@ -97,7 +104,12 @@ def _mic_index():
     substring, so a precise name can never be beaten by a loose one.
     """
     global _mic_device_warned
-    want = str(CFG.get("mic_device", "") or "").strip()
+    try:
+        want = _MIC_OVERRIDE_FILE.read_text().strip()
+    except OSError:
+        want = ""
+    if not want:
+        want = str(CFG.get("mic_device", "") or "").strip()
     if not want:
         return None
     try:

@@ -51,6 +51,20 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s")
 SESSION_FILE = os.path.join(CFG["signals_dir"], ".backtalk_session")
 
 
+def _rel_reset(resets_at) -> str:
+    """', resets in <N> minutes/hours/days' — or '' if unknown/past."""
+    if not resets_at:
+        return ""
+    d = resets_at - datetime.now().timestamp()
+    if not d > 0:
+        return ""
+    if d < 3600:
+        return f", resets in {round(d / 60)} minutes"
+    if d < 86400:
+        return f", resets in {round(d / 3600)} hours"
+    return f", resets in {round(d / 86400)} days"
+
+
 class WarmBrain:
     def __init__(self, model: str | None = None, can_use_tool=None,
                  resume_id: str | None = None):
@@ -75,6 +89,10 @@ class WarmBrain:
         # True while a query's response hasn't been consumed through its
         # ResultMessage — i.e. the shared message pipe may hold leftovers.
         self._dirty = False
+        # window -> resets_at already spoken for, so the "very close to
+        # your limit" warning fires once per window per cycle instead of
+        # every single turn while utilization sits above the threshold.
+        self._usage_alerted: dict[str, float] = {}
 
     async def start(self):
         mode = CFG["permission_mode"]
@@ -190,14 +208,21 @@ class WarmBrain:
         wrong, and the containment is the point. Every failure is
         swallowed and the readout simply goes quiet. It must never cost
         a turn, so it is also bounded -- an unanswered control request
-        would otherwise hang the voice line mid-conversation."""
+        would otherwise hang the voice line mid-conversation.
+
+        Returns a list of spoken warning sentences (usually empty) for
+        any window that just crossed the "very close to the limit"
+        threshold -- fires once per window per reset cycle, not on
+        every turn that happens to land above it (see _usage_alerted)."""
         if not CFG.get("show_usage"):
-            return
+            return []
+        alerts = []
         try:
             usage = await asyncio.wait_for(
                 self._client._query._send_control_request(
                     {"subtype": "get_usage"}), 5)
-            for window in ("five_hour", "seven_day"):
+            for window, spoken in (("five_hour", "five-hour"),
+                                    ("seven_day", "seven-day")):
                 w = (usage.get("rate_limits") or {}).get(window)
                 if not w:
                     continue
@@ -213,8 +238,16 @@ class WarmBrain:
                 if isinstance(resets, str):
                     resets = int(datetime.fromisoformat(resets).timestamp())
                 signals.set_rate_limit(window, pct, resets)
+                if (pct is not None and pct >= CFG.get("usage_alert_at", 0.9)
+                        and self._usage_alerted.get(window) != resets):
+                    self._usage_alerted[window] = resets
+                    alerts.append(
+                        f"Heads up, boss — you're at {round(pct * 100)}% "
+                        f"of your {spoken} usage limit"
+                        f"{_rel_reset(resets)}.")
         except Exception:
             pass
+        return alerts
 
     async def command(self, cmd: str) -> str:
         """Run a console slash command (/clear, /compact, /model,
@@ -345,7 +378,8 @@ class WarmBrain:
                 self._dirty = False    # turn fully consumed — pipe aligned
                 self._tally(msg)
                 self._remember_session(msg)
-                await self._pull_rate_limits()
+                for alert in await self._pull_rate_limits():
+                    yield alert
                 break
         tail = buf.strip()
         if tail:
