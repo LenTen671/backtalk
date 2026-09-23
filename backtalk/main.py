@@ -661,6 +661,19 @@ async def speak_reply(brain: WarmBrain, mouth: Mouth, text: str):
         except Exception:
             pass
         raise
+    except Exception as e:
+        # A mid-turn failure (dead auth token, network drop, brain
+        # crash) must never leave the voice line stuck silent: without
+        # this, the task dies with an unretrieved exception, nothing is
+        # logged or spoken, and "thinking" never clears back to idle.
+        log(f"[{NAME}] speak_reply failed: {e!r}")
+        signals.static_stop()
+        signals.set_state("idle")
+        try:
+            mouth.say("Sorry, boss, I hit an error mid-thought. "
+                      "Check this window's log if it happens again.")
+        except Exception:
+            pass
 
 
 async def amain():
