@@ -587,6 +587,7 @@ async def speak_reply(brain: WarmBrain, mouth: Mouth, text: str):
     first = True
     batch: list[str] = []
     pending: list[str] = []          # directions waiting for their chunk
+    mouth.turn_active = True
 
     def emit(raw: str):
         nonlocal first, batch, pending
@@ -625,6 +626,7 @@ async def speak_reply(brain: WarmBrain, mouth: Mouth, text: str):
         if batch:
             mouth.say_chunk(" ".join(batch), pending)
             pending = []
+        mouth.end_turn()
         if first:
             # Zero sentences yielded (brain error / empty turn): nothing
             # will ever dequeue, so nothing resets the bus — park it here.
@@ -861,7 +863,7 @@ async def amain():
         when the utterance STARTED (the PTT press), so an answer can be
         told apart from speech that began before the ask even existed."""
         nonlocal speak_task
-        log(f"[you]    {text}")
+        log(f"[you]    {text}", color="92")
         # A pending spoken permission ask owns the next utterance IF
         # that utterance started after the ask was posed. Speech that
         # began earlier is the user interrupting the turn, not
