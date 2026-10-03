@@ -121,6 +121,10 @@ DEFAULTS = {
     # frequently on a stream or a shared screen. Nothing is collected at
     # all while this is false. (Community fix, ai-visualizer issue #1.)
     "show_usage": False,
+    # When show_usage is on, speak a one-time heads-up the moment either
+    # usage window first crosses this fraction (0.9 = 90%) — fires once
+    # per window per reset cycle, not on every turn spent above it.
+    "usage_alert_at": 0.9,
     # Reasoning effort for the voice session: "" inherits the model's
     # default; "low" / "medium" / "high" / "max" applies at launch.
     # Saying "set effort to X" in a voice session saves itself here.
