@@ -960,20 +960,37 @@ async def amain():
             except Exception:
                 pass
             speak_task = None
-        verb = verb or console_match(text)
-        if verb:
-            await run_console(verb)
+        try:
+            verb = verb or console_match(text)
+            if verb:
+                await run_console(verb)
+                return True
+            signals.set_state("thinking")
+            signals.static_start()
+            # Clean the pipe: drain the interrupted turn's leftovers so the
+            # new question can't pair with a stale ResultMessage. A gate
+            # that fired in the meantime resolves first, or the drain would
+            # wait on a ResultMessage the CLI is withholding for an answer.
+            _deny_pending()
+            await brain.reset_turn()
+            speak_task = asyncio.create_task(speak_reply(brain, mouth, text))
             return True
-        signals.set_state("thinking")
-        signals.static_start()
-        # Clean the pipe: drain the interrupted turn's leftovers so the
-        # new question can't pair with a stale ResultMessage. A gate
-        # that fired in the meantime resolves first, or the drain would
-        # wait on a ResultMessage the CLI is withholding for an answer.
-        _deny_pending()
-        await brain.reset_turn()
-        speak_task = asyncio.create_task(speak_reply(brain, mouth, text))
-        return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Command matching / turn setup must never escape handle()
+            # uncaught: amain()'s loop only catches KeyboardInterrupt, so
+            # an unhandled exception here would crash the whole process
+            # instead of recovering the way speak_reply already does.
+            log(f"[{NAME}] handle failed: {e!r}")
+            signals.static_stop()
+            signals.set_state("idle")
+            try:
+                mouth.say("Sorry, boss, something broke handling that. "
+                          "Check this window's log if it happens again.")
+            except Exception:
+                pass
+            return True
 
     try:
         # ONE loop, two mic modes, switchable live (_MIC). The talk key
