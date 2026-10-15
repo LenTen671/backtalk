@@ -345,6 +345,12 @@ class Mouth:
         self.ducker = Ducker()  # public: PTT ducks for the USER's voice too
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
+        # True for the whole span of a reply, including the gaps between
+        # queued chunks while the model is still streaming more sentences
+        # in behind a tool call. Lets the queue-drain handler in _run tell
+        # "mid-reply lull" apart from "reply genuinely finished" so the
+        # face doesn't flash idle mid-task.
+        self.turn_active = False
 
     @property
     def speaking(self) -> bool:
@@ -410,11 +416,32 @@ class Mouth:
             finally:
                 if self._q.empty():
                     self._speaking.clear()
-                    # The reply has genuinely stopped talking, as opposed to
-                    # the gap between two sentences of the same reply.
-                    signals.reply_done()
-                    self.ducker.speech_end()
-                    signals.set_state("idle")
+                    if self.turn_active:
+                        # Caught up mid-reply: more sentences are still
+                        # streaming in behind a tool call. Not done yet.
+                        signals.set_state("thinking")
+                    else:
+                        # The reply has genuinely stopped talking, as opposed
+                        # to the gap between two sentences of the same reply.
+                        signals.reply_done()
+                        self.ducker.speech_end()
+                        signals.set_state("idle")
+
+    def end_turn(self):
+        """Call once the model's stream is fully drained (all sentences
+        queued), so the next queue-drain in _run knows the reply is truly
+        over and can report idle instead of thinking.
+
+        Also does its own idle-transition check immediately, to cover the
+        race where the mouth's queue was already empty and silent by the
+        time the stream finished — otherwise nothing would ever flip the
+        state off "thinking" in that case."""
+        self.turn_active = False
+        if self._q.empty() and not self._speaking.is_set():
+            from backtalk import signals
+            signals.reply_done()
+            self.ducker.speech_end()
+            signals.set_state("idle")
 
     def _get_out(self, rate: int) -> sd.OutputStream:
         """The long-lived stream (audio law #1). Reopened only when the

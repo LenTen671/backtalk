@@ -62,8 +62,10 @@ _init_console()
 
 
 def log(line: str, color: str | None = None):
-    """color is an ANSI SGR code (e.g. "34" for blue), console-only —
-    the saved log file always gets the plain, uncolored line."""
+    """`color` is an ANSI SGR code (e.g. "32" for green). It wraps only
+    the console print — the line written to the saved log file stays
+    plain, uncolored, so the log file itself doesn't get harder to
+    grep/read later."""
     console_line = f"\033[{color}m{line}\033[0m" if color else line
     try:
         print(console_line, flush=True)
