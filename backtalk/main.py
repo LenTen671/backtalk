@@ -718,11 +718,22 @@ async def amain():
     try:
         await asyncio.wait_for(brain.start(), 120)
 
+        warm_lines = []
+
         async def _warmup():
-            async for _ in brain.ask_stream(
+            async for line in brain.ask_stream(
                     "Warmup ping - reply with the single word: ready"):
-                pass
+                warm_lines.append(line)
         await asyncio.wait_for(_warmup(), 180)
+        # a failed login/billing check comes back as a spoken error line,
+        # not an exception, so say it now instead of going quiet
+        from backtalk.brain import _SPOKEN_ERRORS
+        for line in warm_lines:
+            if line in _SPOKEN_ERRORS.values() or \
+                    line.startswith("Something went wrong reaching my brain"):
+                log(f"[backtalk] brain NOT ready: {line}")
+                mouth.say(line)
+                break
     except (Exception, asyncio.TimeoutError) as e:
         kind = ("timed out" if isinstance(e, asyncio.TimeoutError)
                 else f"failed: {e!r}"[:220])

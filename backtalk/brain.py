@@ -48,6 +48,28 @@ from backtalk.vlog import log
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s")
 
 
+# Spoken lines for brain errors. These replies arrive as one complete
+# message (never as streamed text), so without this the voice line
+# just goes silent and the error only shows up in the transcript.
+_SPOKEN_ERRORS = {
+    "authentication_failed": "I can't reach my brain, my Claude login has "
+        "expired. Run slash login in a terminal, then restart me.",
+    "billing_error": "I can't reach my brain, there's a billing problem "
+        "on the Claude account.",
+    "rate_limit": "I've hit my usage limit, so I can't answer right now.",
+}
+
+
+def _spoken_error(kind, text: str) -> str:
+    low = (text or "").lower()
+    if kind == "authentication_failed" or "authenticate" in low \
+            or "oauth" in low or "/login" in low:
+        return _SPOKEN_ERRORS["authentication_failed"]
+    if kind in _SPOKEN_ERRORS:
+        return _SPOKEN_ERRORS[kind]
+    return "Something went wrong reaching my brain. Check the Jarvis log."
+
+
 SESSION_FILE = os.path.join(CFG["signals_dir"], ".backtalk_session")
 
 
@@ -346,9 +368,15 @@ class WarmBrain:
         self._dirty = True             # in flight until its ResultMessage
         await self._client.query(utterance)
         buf = ""
+        spoke = False                  # did any real text stream out?
+        err_kind, err_text = None, ""
         async for msg in self._client.receive_response():
             t = type(msg).__name__
-            if t == "StreamEvent":
+            if t == "AssistantMessage" and getattr(msg, "error", None):
+                err_kind = msg.error
+                err_text = " ".join(getattr(b, "text", "") for b in
+                                    getattr(msg, "content", []) or [])
+            elif t == "StreamEvent":
                 ev = getattr(msg, "event", {}) or {}
                 if ev.get("type") == "content_block_delta":
                     delta = ev.get("delta", {}) or {}
@@ -362,6 +390,7 @@ class WarmBrain:
                             sentence, buf = (buf[:m.end()].strip(),
                                              buf[m.end():])
                             if sentence:
+                                spoke = True
                                 yield sentence
                 elif ev.get("type") == "content_block_stop":
                     # End of a speech block (e.g. right before a tool
@@ -373,8 +402,12 @@ class WarmBrain:
                     tail = buf.strip()
                     buf = ""
                     if tail:
+                        spoke = True
                         yield tail
             elif t == "ResultMessage":
+                if getattr(msg, "is_error", False) and not err_text:
+                    err_text = getattr(msg, "result", "") or ""
+                    err_kind = err_kind or "unknown"
                 self._dirty = False    # turn fully consumed — pipe aligned
                 self._tally(msg)
                 self._remember_session(msg)
@@ -383,7 +416,11 @@ class WarmBrain:
                 break
         tail = buf.strip()
         if tail:
+            spoke = True
             yield tail
+        if not spoke and err_kind:
+            log(f"[brain] error ({err_kind}): {err_text}")
+            yield _spoken_error(err_kind, err_text)
 
 
 if __name__ == "__main__":
